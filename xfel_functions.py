@@ -81,15 +81,41 @@ def get_pulse_time():
     every_x_pulse_in_train = 24 # no units, an amount
     return t_min_period*every_x_pulse_in_train
 
+def get_max_intensity(run_number_array):
+    global_max_int = 1000
+    for run in run_number_array:
+        f = open_processed_run(run)
+        intensity_per_pulse = np.array(f['intensity_per_pulse'])
+        f.close()
+        # add the biggest and smallest intensities to a list
+        local_max = int(np.amax(intensity_per_pulse))
+        if local_max >= global_max_int:
+            global_max_int = local_max
+    return global_max_int
 
-def get_peaks_at_int(run_number_array, bins):
+def build_peaks_at_int_dict(max_intensity):
+    '''
+    create the dictionary: peaks_at_int
+    find max and min intensity across all runs
+    for every integer in range [min, max] create a key in the dict
+    peaks_at_int[intensity] = [[],0] #empty list and 0 pulses at int
+    return this and pass to get_peaks_at_int
+    that way it will not have to check and make bins and all that garbage
+    '''
+    peaks_at_int = {}
+    # for all integers in range [min, max], add a key to the dictionary peaks_at_int
+    # starting at 0 because of erroreous vaues of intensity being negative
+    for i in range(0, max_intensity+1, 1):
+        peaks_at_int[i] = [[],0]
+    return peaks_at_int
+
+def get_peaks_at_int(run_number_array, peaks_at_int):
     '''
     return a dictionary of all the peaks found at various bins of intensity
     peaks_at_int[intensity] = ([all peaks], # pulses)
     Use a core python list here for the v since I'll be appending a lot.
     '''
     # default bins? maybe think of a better way to get the default
-    peaks_at_int = {}
     # add all the bins (in order) to the dict 
     for run in run_number_array:
         f = open_processed_run(run)
@@ -104,85 +130,62 @@ def get_peaks_at_int(run_number_array, bins):
         peaks_per_pulse = np.array(np.array_split(all_peaks, peak_indicies))[0:-1]
         for i, p in zip(intensity_per_pulse, peaks_per_pulse):
             if int(i) in peaks_at_int:
-                peaks_at_int[i][0].extend(peaks_per_pulse)
-                peaks_at_int[i][1]+=1
+                peaks_at_int[int(i)][0].extend(p)
+                peaks_at_int[int(i)][1]+=1
             else:
-                # the intensity is not yet in the dict.
-                peaks_at_int[int(i)] = [[peaks_per_pulse], 1]
+                # not allowed value of intensity (like negative)
+                pass
     return peaks_at_int
 
 
-def get_count_mode_at_intensity(peaks_at_int):
+def get_count_per_pulse_at_intensity(peaks_at_int):
     '''
     takes the dictionary of peaks at intensity and returns 
     a dictionary of the count mode at each intensity
     '''
     pulse_time = get_pulse_time()
     bin_size = 1 # ns/2 
+    #print(pulse_time+1)
+    # are the zeros the same shape?
     count_mode_at_intensity = {}
     for intensity in peaks_at_int:
-        all_peaks = peaks_at_int[intensity][0]
-        count_at_intensity = np.histogram(all_peaks, bins=range(0, pulse_time+1, bin_size))[0]
-        count_mode_at_intensity[intensity] = (count_at_intensity, peaks_at_int[intensity][1])
+        # check if there are 0 pulses
+        if peaks_at_int[intensity][1] == 0:
+            # there are no pulses at this intensity
+            count_mode_at_intensity[intensity] = np.zeros(pulse_time)
+        else: 
+            # there are pulses at this intensity
+            all_peaks = peaks_at_int[intensity][0]
+            count_at_intensity = np.histogram(all_peaks, bins=range(0, pulse_time+1, bin_size))[0]
+            count_at_intensity = count_at_intensity/peaks_at_int[intensity][1]
+            count_mode_at_intensity[intensity] = count_at_intensity
     return count_mode_at_intensity
 
 
-def get_i_peaks_at_int(run_number_array):
+def mush_tof(square_counts, divisions=4224):
     '''
-    all peaks for integer bins
     '''
-    peaks_at_int = {}
-    for run in run_number_array:
-        f = open_processed_run(run)
-        number_of_peaks_per_pulse = np.array(f['num_peaks_per_pulse'])
-        intensity_per_pulse = np.array(f['intensity_per_pulse'])
-        all_peaks = np.array(f['all_peaks'])
-        f.close()
-        # the indicies to slice along to seperate all peaks into peaks per pulse
-        # is the cumulative sum of peaks_per_pulse
-        peak_indicies = np.cumsum(number_of_peaks_per_pulse)
-        # spit all_peaks along those indicies to get peaks on a pulse by pulse basis
-        peaks_per_pulse = np.array(np.array_split(all_peaks, peak_indicies))[0:-1]
-        for i, p in zip(intensity_per_pulse, peaks_per_pulse):
-            # i: intensity of the pulse
-            # p: peaks in that pulse
-            peaks_in_pulse = list(p)
-            integer_intensity = int(i)
-            if integer_intensity in peaks_at_int:
-                peaks_at_int[integer_intensity][0].extend(peaks_in_pulse)
-                peaks_at_int[integer_intensity][1] = int(peaks_at_int[integer_intensity][1])+1
-            else:
-                peaks_at_int[integer_intensity] = [peaks_in_pulse,1]
-    return peaks_at_int
+    cols = []
+    split_array = np.split(square_counts, divisions, axis=1)
+    for sub_array in split_array:
+        sa = np.sum(sub_array, axis=1)
+        cols.append(sa)
+    cols = tuple(cols)
+    combined_array = np.column_stack(cols)
+    return combined_array
 
 
-def i_get_count_mode_at_intensity(peaks_at_int):
+def nearest_neighbor_interpolation(square_counts):
     '''
-    FOR THE MESH
-    normalized count mode for ever integer value of intensity
-    a dictionary of the count mode at each intensity
     '''
-    pulse_time = get_pulse_time()
-    bin_size = 1 # ns/2 
-    count_mode_at_intensity = {}
-    for intensity in peaks_at_int:
-        all_peaks = peaks_at_int[intensity][0]
-        count_at_intensity = np.histogram(all_peaks, bins=range(0, pulse_time+1, bin_size))[0]
-        count_mode_at_intensity[intensity] = count_at_intensity#/#(peaks_at_int[intensity][1])
-    return count_mode_at_intensity 
+    return
 
 
-def fill_i_count(count_mode_at_intensity):
-    ''' fill in all the 'empty' rows where no int was recorded'''
-    max_intensity = sorted(count_mode_at_intensity)[-1]
-    min_intensity = sorted(count_mode_at_intensity)[0]
-    ints = range(min_intensity, max_intensity, 1)
-    for i in ints:
-        if i not in count_mode_at_intensity:
-            count_mode_at_intensity[i] = np.zeros(42240)
-
-    return count_mode_at_intensity
-
+# little snippit to save dict
+#import csv
+#w = csv.writer(open("output.csv", "w"))
+#for key, val in peaks_at_int.items():
+#    w.writerow([key, val])
 
 def get_ion_count_at_intensity(count_mode_at_intensity):
     '''
