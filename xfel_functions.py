@@ -23,7 +23,7 @@ def open_processed_run(run_number):
     '''
     local_dir = os.path.dirname('__file__')
     target_file = os.path.join(local_dir,'run_'+str(run_number)+'_proc2.h5')
-    print(target_file)
+    print("Opening file: "+str(target_file))
     try:
         f = h5.File(target_file, 'r')
     except:
@@ -71,6 +71,27 @@ def round_intensity_to_closest_bin(n, bins):
     # Return of closest of two 
     return int(b if n - a > b - n else a)
 
+
+def get_bins(intensity_range, bin_size):
+    '''
+    take the two endpoints found from get_intensity_range() 
+    and use them to generate an array of bins
+    '''
+    lower_bound = intensity_range[0]
+    a = (lower_bound // bin_size) * bin_size
+    # Larger multiple 
+    b = a + bin_size
+    lower_bound = int(b if lower_bound - a > b - lower_bound else a)
+    upper_bound = intensity_range[1]
+    a = (upper_bound // bin_size) * bin_size
+    # Larger multiple 
+    b = a + bin_size
+    upper_bound = int(b if upper_bound - a > b - upper_bound else a)
+    bins = []
+    for i in range(lower_bound, upper_bound+bin_size, bin_size):
+        bins.append(i)
+    return bins   
+
 def get_pulse_time():
     '''
     Edwin's Method for getting the pulse time
@@ -81,17 +102,54 @@ def get_pulse_time():
     every_x_pulse_in_train = 24 # no units, an amount
     return t_min_period*every_x_pulse_in_train
 
+
 def get_max_intensity(run_number_array):
-    global_max_int = 1000
+    '''
+    find the maximum pulse intensity across all runs_to_analyze
+    updated to not presuppose a certain range of pulse intensities
+    '''
+    first_run_number = run_number_array.pop()
+    first_run = open_processed_run(first_run_number)
+    global_max_int = int(np.amax(np.array(f['intensity_per_pulse'])))
     for run in run_number_array:
         f = open_processed_run(run)
         intensity_per_pulse = np.array(f['intensity_per_pulse'])
         f.close()
-        # add the biggest and smallest intensities to a list
         local_max = int(np.amax(intensity_per_pulse))
         if local_max >= global_max_int:
             global_max_int = local_max
     return global_max_int
+
+
+def get_intensity_range(run_number_array):
+    '''
+    find the maximum/minimum pulse intensity across all runs_to_analyze
+    average all max/min pulse intensities to get average endpoints
+    averge endpoints become the intensity range for the 3d plot
+    make sure no negative intensities pollute the min average
+    this will crash if run_number_array is of length 1
+    or not an array
+    '''
+    max_ints = []
+    min_ints = []
+    for run in run_number_array:
+        f = open_processed_run(run)
+        intensity_per_pulse = np.array(f['intensity_per_pulse'])
+        f.close()
+        max_ints.append(int(np.amax(intensity_per_pulse)))
+        min_ints.append(int(np.amin(intensity_per_pulse)))
+    # to ensure that the endpoints are not messed up by negative/weird intensity
+    # resulting from instrumentation or recording errors (of which I have noticed a couple)
+    # lets clean up the lists before finding the averages
+    for x in min_ints:
+        if x <= 0:
+            min_ints.remove(x)
+    for x in max_ints:
+        if x <= 0:
+            max_ints.remove(x)
+    mean_min = int(np.mean(min_ints))
+    mean_max = int(np.mean(max_ints))
+    return [mean_min, mean_max]
 
 def build_peaks_at_int_dict(max_intensity):
     '''
@@ -109,14 +167,42 @@ def build_peaks_at_int_dict(max_intensity):
         peaks_at_int[i] = [[],0]
     return peaks_at_int
 
-def get_peaks_at_int(run_number_array, peaks_at_int):
+
+def get_all_peaks(run_number_array):
+    peaks = []
+    for run in run_number_array:
+        f = open_processed_run(run)
+        all_peaks = np.array(f['all_peaks'])
+        peaks.extend(all_peaks)
+        f.close()
+    return peaks
+
+def get_all_count(all_peaks):
+    bin_size = 1
+    pulse_time = get_pulse_time()
+    all_count = np.histogram(all_peaks, bins=range(0, pulse_time+1, bin_size))[0]
+    return all_count
+
+def get_peaks_at_photon_energy(run_number_array):
+    get_peaks_at_photon_energy = {}
+    for run in run_number_array:
+        f = open_processed_run(run)
+        number_of_peaks_per_pulse = np.array(f['num_peaks_per_pulse'])
+        all_peaks = np.array(f['all_peaks'])
+        photon_energy = np.array(f['photon_energy'])
+        print(photon_energy)
+        f.close()        
+
+
+def get_peaks_at_int(run_number_array, bins):
     '''
     return a dictionary of all the peaks found at various bins of intensity
     peaks_at_int[intensity] = ([all peaks], # pulses)
-    Use a core python list here for the v since I'll be appending a lot.
     '''
-    # default bins? maybe think of a better way to get the default
-    # add all the bins (in order) to the dict 
+    peaks_at_int = {}
+    # fill the dictionary with intensities from the bins array
+    for bin in bins:
+        peaks_at_int[bin] = [[], 0]
     for run in run_number_array:
         f = open_processed_run(run)
         number_of_peaks_per_pulse = np.array(f['num_peaks_per_pulse'])
@@ -129,12 +215,31 @@ def get_peaks_at_int(run_number_array, peaks_at_int):
         # spit all_peaks along those indicies to get peaks on a pulse by pulse basis
         peaks_per_pulse = np.array(np.array_split(all_peaks, peak_indicies))[0:-1]
         for i, p in zip(intensity_per_pulse, peaks_per_pulse):
-            if int(i) in peaks_at_int:
-                peaks_at_int[int(i)][0].extend(p)
-                peaks_at_int[int(i)][1]+=1
-            else:
-                # not allowed value of intensity (like negative)
+            if i < (bins[1]-(bins[1]-bins[0])):
+                # pulse energy is below 0, dont include
+                # changed this so that if it is less than 
+                # 1 bin width away that it will not include
+                # 300 - (600-300) example of that line
                 pass
+            elif i > (bins[-1]+(bins[1]-bins[0])):
+                # dont include this, the pulse energy is too big
+                # greater that 1 bin width beyond the cutoff
+                pass
+            else:
+                # convert the raw intensity, i, to the closest bin
+                bin_int = round_intensity_to_closest_bin(i, bins)
+                peaks_at_int[bin_int][0].extend(p)
+                peaks_at_int[bin_int][1]+=1
+    return peaks_at_int
+
+
+def crude_interp_fill_dict(peaks_at_int, max_intensity):
+    prev_val = [[],0]
+    for i in range(1,max_intensity):
+        if i in peaks_at_int:
+            prev_val = peaks_at_int[i]
+        else:
+            peaks_at_int[i] = prev_val
     return peaks_at_int
 
 
@@ -143,26 +248,37 @@ def get_count_per_pulse_at_intensity(peaks_at_int):
     takes the dictionary of peaks at intensity and returns 
     a dictionary of the count mode at each intensity
     '''
+    print("Pulse Energy",end='\t')
+    print("Ar17+ Counts",end='\t')
+    print('Number of pulses')
     pulse_time = get_pulse_time()
-    bin_size = 1 # ns/2 
+    bin_size = 1 # 5 ns, 1 = ns/2
+    # want to use a bigger bin to make the shape a little more square
     #print(pulse_time+1)
     # are the zeros the same shape?
-    count_mode_at_intensity = {}
-    for intensity in peaks_at_int:
+    count_at_intensity = {}
+    for intensity_bin in peaks_at_int:
         # check if there are 0 pulses
-        if peaks_at_int[intensity][1] == 0:
-            # there are no pulses at this intensity
-            count_mode_at_intensity[intensity] = np.zeros(pulse_time)
+        if peaks_at_int[intensity_bin][0] == []:
+            # there are no peaks at this intensity (even if there are pulses!)
+            count_at_intensity[intensity_bin] = np.zeros(pulse_time)
         else: 
-            # there are pulses at this intensity
-            all_peaks = peaks_at_int[intensity][0]
-            count_at_intensity = np.histogram(all_peaks, bins=range(0, pulse_time+1, bin_size))[0]
-            count_at_intensity = count_at_intensity/peaks_at_int[intensity][1]
-            count_mode_at_intensity[intensity] = count_at_intensity
-    return count_mode_at_intensity
+            # there are peaks at this intensity
+            all_peaks = peaks_at_int[intensity_bin][0]
+            count = np.histogram(all_peaks, bins=range(0, pulse_time+1, bin_size))[0]
+            # divide by number of pulses
+            #print(intensity_bin, end='\t')
+            #ar17_count = np.sum(count[int(get_tof(17)-12):int(get_tof(17)+12)])
+            #print(ar17_count,end='\t')
+            #print(peaks_at_int[intensity_bin][1])
+            count = count/peaks_at_int[intensity_bin][1]
+            #print(intensity_bin, end='\t')
+            #print(peaks_at_int[intensity_bin][1])
+            count_at_intensity[intensity_bin] = count
+    return count_at_intensity
 
 
-def mush_tof(square_counts, divisions=4224):
+def mush_tof(square_counts, divisions=2640):
     '''
     '''
     cols = []
@@ -178,7 +294,50 @@ def mush_tof(square_counts, divisions=4224):
 def nearest_neighbor_interpolation(square_counts):
     '''
     '''
-    return
+    # split the square array on a column by column basis
+    # taking slices at various times of flight as intensity varies
+    number_of_columns = np.shape(square_counts)[1] # (rows, columns)
+    number_of_rows = np.shape(square_counts)[0]
+    split_array = np.split(square_counts, number_of_columns, axis=1)
+    # use list bc its easier ;)
+    compare_arr = list(np.zeros(number_of_rows))
+    split_array = [list(a) for a in split_array]
+    for tof_slice in split_array:
+        if tof_slice == compare_arr:
+            # if all zeros, skip it! waste of time.
+            #print("Skipping, waste of time")
+            pass
+        else:
+            #print("Not all zeros")
+            for count in tof_slice:
+                if tof_slice.index(count) == 0:
+                    # first element in the list, special case
+                    if count == 0:
+                        # if the count is zero
+                        # we interpolate
+                        # half of nearest neighbor
+                        tof_slice[0] = tof_slice[1]/2
+                if tof_slice.index(count) == len(tof_slice)-1:
+                    # last elemt in the list, special case
+                    if count == 0:
+                        # if 0 we interpolate
+                        tof_slice[-1] = tof_slice[-2]/2
+                else:
+                    if count == 0:
+                        # not an extreme case, 2 neighbors
+                        # also 0, interpolate
+                        index = tof_slice.index(count)
+                        next_val = tof_slice[index+1]
+                        prev_val = tof_slice[index-1]
+                        average = (prev_val+next_val)/2
+                        # set to average, hope that works
+                        tof_slice[index] = average
+                    else:
+                        # not extreme, has value, pass
+                        pass
+    cols = tuple(split_array)
+    combined_array = np.column_stack(cols)
+    return combined_array
 
 
 # little snippit to save dict
