@@ -233,6 +233,145 @@ def get_peaks_at_int(run_number_array, bins):
     return peaks_at_int
 
 
+def get_peaks_at_variable_int(run_number_array, minimum_intensity):
+    '''
+    this function (based on one abov) is for building a dictionary
+    with symmetric bins such that each bin at minimum holds a certain number of counts
+    if the pulse energy is below the minimum_intensity are tossed out
+    since there are some errors with negative pulse intensity
+    use round() to get the intensities
+    sort() to put in order and iterate over
+    store ints in an array and average
+    ask about what the uncertainty in that average is
+    '''
+    peaks_at_int = {}
+    # fill the dictionary with intensities from the bins array
+
+    #for bin in bins:
+    #    peaks_at_int[bin] = [[], 0]
+
+    for run in run_number_array:
+        f = open_processed_run(run)
+        number_of_peaks_per_pulse = np.array(f['num_peaks_per_pulse'])
+        intensity_per_pulse = np.array(f['intensity_per_pulse'])
+        all_peaks = np.array(f['all_peaks'])
+        f.close()
+        # the indicies to slice along to seperate all peaks into peaks per pulse
+        # is the cumulative sum of peaks_per_pulse
+        peak_indicies = np.cumsum(number_of_peaks_per_pulse)
+        # spit all_peaks along those indicies to get peaks on a pulse by pulse basis
+        peaks_per_pulse = np.array(np.array_split(all_peaks, peak_indicies))[0:-1]
+        for i, p in zip(intensity_per_pulse, peaks_per_pulse):
+            if i < minimum_intensity:
+                # pulse energy is min int, dont include
+                pass
+            else:
+                # convert the raw intensity, i, to the closest bin
+                bin_int = int(round(i))
+                if bin_int in peaks_at_int:
+                    peaks_at_int[bin_int][0].extend(p)
+                    peaks_at_int[bin_int][1]+=1
+                else:
+                    peaks_at_int[bin_int] = [list(p), 1]
+    return peaks_at_int
+
+
+def get_count_at_variable_int(peaks_at_int, counts_per_bin):
+    pulse_time = get_pulse_time()
+    bin_size = 1 # 5 ns, 1 = ns/2
+    count_at_intensity = {}
+
+    ar17_counter = 0
+    intensity_list = []
+    pulse_counter = 0
+    all_peaks = []
+
+    for intensity in sorted(peaks_at_int):
+        number_of_pulses_in_bin = peaks_at_int[intensity][1]
+
+        # crawl across the mountain of counts
+        all_peaks.extend(peaks_at_int[intensity][0])
+        peaks = peaks_at_int[intensity][0]
+        count = np.histogram(peaks, bins=range(0, pulse_time+1, bin_size))[0]
+        ar17_count = np.sum(count[int(get_tof(17)-12):int(get_tof(17)+12)])
+        #print(intensity, ar17_count)
+        ar17_counter+= ar17_count
+        if ar17_count > 0:
+            print(intensity)
+            intensity_list.append(intensity)
+        pulse_counter += number_of_pulses_in_bin
+        if ar17_counter >= counts_per_bin:
+            # we have enough counts
+            #print(intensity_list[-1])
+
+            # save this variable slice
+            count = np.histogram(all_peaks, bins=range(0, pulse_time+1, bin_size))[0]
+            count_at_intensity[np.mean(intensity_list)] = [count, pulse_counter]
+            
+            # reset all counters
+            ar17_counter = 0
+            intensity_list = []
+            pulse_counter = 0
+            all_peaks = []
+        else:
+            if intensity == max(peaks_at_int):
+                # we have reached the end but do not have enough counts
+                # we have enough counts
+
+                # save this variable slice
+                count = np.histogram(all_peaks, bins=range(0, pulse_time+1, bin_size))[0]
+                count_at_intensity[np.mean(intensity_list)] = [count, pulse_counter]
+                
+                # reset all counters
+                ar17_counter = 0
+                intensity_list = []
+                pulse_counter = 0
+                all_peaks = []
+            else:
+                pass
+
+    return count_at_intensity
+
+
+
+
+
+
+def get_peaks_in_bin(run_number_array, center, half_width):
+    '''
+    return a dictionary of all the peaks found at various bins of intensity
+    peaks_at_int[intensity] = ([all peaks], # pulses)
+    '''
+    peaks_at_int = {}
+    # add the singular bin into the dictionary
+    peaks_at_int[center] = [[], 0]
+    for run in run_number_array:
+        f = open_processed_run(run)
+        number_of_peaks_per_pulse = np.array(f['num_peaks_per_pulse'])
+        intensity_per_pulse = np.array(f['intensity_per_pulse'])
+        all_peaks = np.array(f['all_peaks'])
+        f.close()
+        # the indicies to slice along to seperate all peaks into peaks per pulse
+        # is the cumulative sum of peaks_per_pulse
+        peak_indicies = np.cumsum(number_of_peaks_per_pulse)
+        # spit all_peaks along those indicies to get peaks on a pulse by pulse basis
+        peaks_per_pulse = np.array(np.array_split(all_peaks, peak_indicies))[0:-1]
+        for i, p in zip(intensity_per_pulse, peaks_per_pulse):
+            if i < center-half_width:
+                # pulse energy is below 0, dont include
+                # changed this so that if it is less than 
+                # 1 bin width away that it will not include
+                # 300 - (600-300) example of that line
+                pass
+            else:
+                peaks_at_int[center][0].extend(p)
+                peaks_at_int[center][1]+=1
+
+    return peaks_at_int
+
+
+
+
 def crude_interp_fill_dict(peaks_at_int, max_intensity):
     prev_val = [[],0]
     for i in range(1,max_intensity):
@@ -242,15 +381,15 @@ def crude_interp_fill_dict(peaks_at_int, max_intensity):
             peaks_at_int[i] = prev_val
     return peaks_at_int
 
+def get_pulses_in_bin(peaks_at_int, intensity_bin):
+    return peaks_at_int[intensity_bin][1]
 
-def get_count_per_pulse_at_intensity(peaks_at_int):
+
+def get_count_in_intensity_bin(peaks_at_int):
     '''
     takes the dictionary of peaks at intensity and returns 
     a dictionary of the count mode at each intensity
     '''
-    print("Pulse Energy",end='\t')
-    print("Ar17+ Counts",end='\t')
-    print('Number of pulses')
     pulse_time = get_pulse_time()
     bin_size = 1 # 5 ns, 1 = ns/2
     # want to use a bigger bin to make the shape a little more square
@@ -267,15 +406,138 @@ def get_count_per_pulse_at_intensity(peaks_at_int):
             all_peaks = peaks_at_int[intensity_bin][0]
             count = np.histogram(all_peaks, bins=range(0, pulse_time+1, bin_size))[0]
             # divide by number of pulses
+
+            #count = count/peaks_at_int[intensity_bin][1]
             #print(intensity_bin, end='\t')
-            #ar17_count = np.sum(count[int(get_tof(17)-12):int(get_tof(17)+12)])
-            #print(ar17_count,end='\t')
             #print(peaks_at_int[intensity_bin][1])
+            count_at_intensity[intensity_bin] = count
+    return count_at_intensity
+
+
+def get_count_per_pulse_at_intensity(peaks_at_int):
+    '''
+    takes the dictionary of peaks at intensity and returns 
+    a dictionary of the count mode at each intensity
+    '''
+    pulse_time = get_pulse_time()
+    bin_size = 1 # 5 ns, 1 = ns/2
+    # want to use a bigger bin to make the shape a little more square
+    #print(pulse_time+1)
+    # are the zeros the same shape?
+    count_at_intensity = {}
+    for intensity_bin in peaks_at_int:
+        # check if there are 0 pulses
+        if peaks_at_int[intensity_bin][0] == []:
+            # there are no peaks at this intensity (even if there are pulses!)
+            count_at_intensity[intensity_bin] = np.zeros(pulse_time)
+        else: 
+            # there are peaks at this intensity
+            all_peaks = peaks_at_int[intensity_bin][0]
+            count = np.histogram(all_peaks, bins=range(0, pulse_time+1, bin_size))[0]
+            # divide by number of pulses
+            print(intensity_bin)
+            ar17_count = np.sum(count[int(get_tof(17)-12):int(get_tof(17)+12)])
+            ar16_count = np.sum(count[int(get_tof(16)-12):int(get_tof(16)+12)])
+            print("17:"+str(ar17_count))
+            print("16:"+str(ar16_count))
+
             count = count/peaks_at_int[intensity_bin][1]
             #print(intensity_bin, end='\t')
             #print(peaks_at_int[intensity_bin][1])
             count_at_intensity[intensity_bin] = count
     return count_at_intensity
+
+def get_count_and_error_per_pulse_at_intensity(peaks_at_int):
+    '''
+    takes the dictionary of peaks at intensity and returns 
+    a dictionary of the count mode at each intensity
+    '''
+    pulse_time = get_pulse_time()
+    bin_size = 1 # 5 ns, 1 = ns/2
+    # want to use a bigger bin to make the shape a little more square
+    #print(pulse_time+1)
+    # are the zeros the same shape?
+    count_at_intensity = {}
+    for intensity_bin in peaks_at_int:
+        # check if there are 0 pulses
+        if peaks_at_int[intensity_bin][0] == []:
+            # there are no peaks at this intensity (even if there are pulses!)
+            count_at_intensity[intensity_bin] = np.zeros(pulse_time)
+        else: 
+            # there are peaks at this intensity
+            all_peaks = peaks_at_int[intensity_bin][0]
+            count = np.histogram(all_peaks, bins=range(0, pulse_time+1, bin_size))[0]
+            # divide by number of pulses
+            print(intensity_bin, end='\t')
+            ar17_count = np.sum(count[int(get_tof(17)-12):int(get_tof(17)+12)])
+            ar16_count = np.sum(count[int(get_tof(16)-12):int(get_tof(16)+12)])
+            ar15_count = np.sum(count[int(get_tof(15)-12):int(get_tof(15)+12)])
+            ar14_count = np.sum(count[int(get_tof(14)-12):int(get_tof(14)+12)])
+            ar13_count = np.sum(count[int(get_tof(13)-12):int(get_tof(13)+12)])
+            ar12_count = np.sum(count[int(get_tof(12)-12):int(get_tof(12)+12)])
+
+            print("17 "+str(ar17_count))
+            print("16 "+str(ar16_count))
+            print("15 "+str(ar15_count))
+            print("14 "+str(ar14_count))
+            print("13 "+str(ar13_count))
+            print("12 "+str(ar12_count))
+
+            print(peaks_at_int[intensity_bin][1])
+            count = count/peaks_at_int[intensity_bin][1]
+            #print(intensity_bin, end='\t')
+            #print(peaks_at_int[intensity_bin][1])
+            count_at_intensity[intensity_bin] = count
+            
+
+    return count_at_intensity, peaks_at_int[intensity_bin][1]
+
+
+def get_count_and_numPulses_at_intensity(peaks_at_int):
+    '''
+    takes the dictionary of peaks at intensity and returns 
+    a dictionary of the count mode at each intensity
+    '''
+    pulse_time = get_pulse_time()
+    bin_size = 1 # 5 ns, 1 = ns/2
+    # want to use a bigger bin to make the shape a little more square
+    #print(pulse_time+1)
+    # are the zeros the same shape?
+    count_at_intensity = {}
+    for intensity_bin in peaks_at_int:
+        # check if there are 0 pulses
+        if peaks_at_int[intensity_bin][0] == []:
+            # there are no peaks at this intensity (even if there are pulses!)
+            count_at_intensity[intensity_bin] = np.zeros(pulse_time)
+        else: 
+            # there are peaks at this intensity
+            all_peaks = peaks_at_int[intensity_bin][0]
+            count = np.histogram(all_peaks, bins=range(0, pulse_time+1, bin_size))[0]
+            # divide by number of pulses
+            print(intensity_bin, end='\t')
+            ar17_count = np.sum(count[int(get_tof(17)-12):int(get_tof(17)+12)])
+            ar16_count = np.sum(count[int(get_tof(16)-12):int(get_tof(16)+12)])
+            ar15_count = np.sum(count[int(get_tof(15)-12):int(get_tof(15)+12)])
+            ar14_count = np.sum(count[int(get_tof(14)-12):int(get_tof(14)+12)])
+            ar13_count = np.sum(count[int(get_tof(13)-12):int(get_tof(13)+12)])
+            ar12_count = np.sum(count[int(get_tof(12)-12):int(get_tof(12)+12)])
+
+            print("17 "+str(ar17_count))
+            print("16 "+str(ar16_count))
+            print("15 "+str(ar15_count))
+            print("14 "+str(ar14_count))
+            print("13 "+str(ar13_count))
+            print("12 "+str(ar12_count))
+
+            print(peaks_at_int[intensity_bin][1])
+            count = count/peaks_at_int[intensity_bin][1]
+            #print(intensity_bin, end='\t')
+            #print(peaks_at_int[intensity_bin][1])
+            count_at_intensity[intensity_bin] = count
+            
+
+    return count_at_intensity, peaks_at_int[intensity_bin][1]
+
 
 
 def mush_tof(square_counts, divisions=2640):
@@ -386,4 +648,37 @@ def get_ion_count_at_intensity(count_mode_at_intensity):
         counter+=1
     return ion_count_grid
 
+### NEW FUNCTIONS ###
+
+def get_ratio_and_error(ar17_count, ar16_count, intensity_bin, peaks_dict):
+    number_of_pulses_in_bin = get_pulses_in_bin(peaks_dict, intensity_bin)
+    ratio = ar17_count/ar16_count
+    total_ar17_counts = round(ar17_count*number_of_pulses_in_bin)
+    total_ar16_counts = round(ar16_count*number_of_pulses_in_bin)
+    ratio_error = ratio*np.sqrt((1/total_ar17_counts)+(1/total_ar16_counts))
+    return ratio, ratio_error
+
+
+def get_variable_ratio_and_error(ar17count, ar16count, number_of_pulses):
+    ratio = ar17count/ar16count
+    total_ar17_counts = round(ar17count*number_of_pulses)
+    total_ar16_counts = round(ar16count*number_of_pulses)
+    ratio_error = ratio*np.sqrt((1/total_ar17_counts)+(1/total_ar16_counts))
+    return ratio, ratio_error
+
+
+def get_count_error(count, intensity_bin):
+    # dont include the # of pulses because the count is so much higher 
+    #number of pulses:
+    number_of_pulses_in_bin = get_pulses_in_bin(peaks_at_1550, intensity_bin)
+    number_of_total_counts = count*number_of_pulses_in_bin
+    error = (1/np.sqrt(number_of_total_counts))*count
+    return error
+
+def chi_sq(raw_y, fit_y):
+    var = np.var(raw_y)
+    ds = []
+    for f, r in zip(fit_y, raw_y):
+        ds.append(((f-r)**2)/var)
+    return np.sum(ds)
 

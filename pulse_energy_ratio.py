@@ -7,7 +7,7 @@ from matplotlib import rc
 from scipy.optimize import curve_fit
 import matplotlib as mpl
 from pylab import cm
-rc('font',**{'family':'sans-serif'})
+rc('font',**{'family':'serif'})
 
 def fit_function(x, a, b):
 	return a*x**b 
@@ -106,13 +106,13 @@ print(stdevs)
 print(popt)
 
 #plt.scatter(x_vals,y_vals, s=20, color='black')
-plt.errorbar(x_vals,y_vals, yerr=errors, ecolor='black', linestyle='none', fmt='k.', capsize=3, label='1550ev')
-plt.plot(domain, fit_function(domain, *popt), 'k--')
+plt.errorbar(x_vals,y_vals, yerr=errors, ecolor='black', linestyle='none', fmt='k.', capsize=3)#, label='1550ev')
+plt.plot(domain, fit_function(domain, *popt), 'k-')
 
-plt.title("Fit function: Y=ax^b, b="+format(str(popt[1]), '.3')+r"$\pm$"+format(str(stdevs[1]),'.3'))
+plt.title(r"Fit function: $Y=ax^{b}$, b="+format(str(popt[1]), '.3')+r"$\pm$"+format(str(stdevs[1]),'.3'))
 plt.xlabel("Pulse Intensity (arb. units)", fontsize='medium')#, fontweight='bold')
 plt.ylabel(r'Normalized $Ar^{17+}$/$Ar^{16+}$ ratio', fontsize='medium')#, fontweight='bold')
 
-plt.legend()
+#plt.legend()
 plt.tight_layout()
 plt.show()
